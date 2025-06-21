@@ -1,0 +1,23 @@
+{
+  "name": "cf-code",
+  "version": "1.0.0",
+  "description": "Cloudflare Workers and Pages code repository",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:staging": "wrangler deploy --env staging",
+    "build": "echo 'Build step - add your build process here'",
+    "test": "echo 'Tests - add your test framework here'"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "edge-computing"
+  ],
+  "author": "simplesalt",
+  "license": "MIT"
+}

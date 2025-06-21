@@ -1,0 +1,41 @@
+# Cloudflare Workers configuration
+# See: https://developers.cloudflare.com/workers/configuration/
+
+name = "cf-workers"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# Environment variables
+[vars]
+ENVIRONMENT = "production"
+
+# KV namespace bindings
+[[kv_namespaces]]
+binding = "CF_STATE"
+id = ""  # Will be populated from CF_IaC terraform outputs
+
+# Durable Object bindings (if needed)
+# [[durable_objects.bindings]]
+# name = "MY_DURABLE_OBJECT"
+# class_name = "MyDurableObject"
+
+# R2 bucket bindings (if needed)
+# [[r2_buckets]]
+# binding = "MY_BUCKET"
+# bucket_name = "my-bucket"
+
+# Routes for deployment
+[routes]
+# patterns = ["api.simplesalt.company/*"]
+
+# Build configuration
+[build]
+command = "npm run build"
+
+# Development configuration
+[env.development]
+vars = { ENVIRONMENT = "development" }
+
+# Staging configuration  
+[env.staging]
+vars = { ENVIRONMENT = "staging" }
