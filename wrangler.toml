@@ -16,9 +16,10 @@ ENVIRONMENT = "production"
 # - fhwowggbohorrud2kj16 (Notion API key)
 
 # KV namespace bindings
-[[kv_namespaces]]
-binding = "CF_STATE"
-id = ""  # Will be populated from CF_IaC terraform outputs
+# [[kv_namespaces]]
+# binding = "CF_STATE"
+# id = ""  # Will be populated from CF_IaC terraform outputs
+# Uncomment and add KV namespace ID when available
 
 # Durable Object bindings (if needed)
 # [[durable_objects.bindings]]
@@ -31,12 +32,11 @@ id = ""  # Will be populated from CF_IaC terraform outputs
 # bucket_name = "my-bucket"
 
 # Routes for deployment
-[routes]
-patterns = ["api.simplesalt.company/nuywznihg08edfslfk29/*"]
+routes = ["nuywznihg08edfslfk29.api.simplesalt.company/*"]
 
 # Build configuration
-[build]
-command = "npm run build"
+# [build]
+# command = "npm run build"
 
 # Development configuration
 [env.development]

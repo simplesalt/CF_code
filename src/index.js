@@ -189,10 +189,12 @@ async function getApiCredentials(env, route) {
       return { apiKey: secretValue };
     }
     
-    // Try to get from KV store as fallback
-    const kvValue = await env.CF_STATE?.get(`secret_${route.secretName}`);
-    if (kvValue) {
-      return JSON.parse(kvValue);
+    // Try to get from KV store as fallback (if KV namespace is configured)
+    if (env.CF_STATE) {
+      const kvValue = await env.CF_STATE.get(`secret_${route.secretName}`);
+      if (kvValue) {
+        return JSON.parse(kvValue);
+      }
     }
     
     return null;
