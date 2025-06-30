@@ -32,7 +32,7 @@ ENVIRONMENT = "production"
 # bucket_name = "my-bucket"
 
 # Routes for deployment
-routes = ["nuywznihg08edfslfk29.api.simplesalt.company/*"]
+routes = ["api.simplesalt.company/nuywznihg08edfslfk29"]
 
 # Build configuration
 # [build]
