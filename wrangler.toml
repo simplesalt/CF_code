@@ -9,6 +9,12 @@ compatibility_date = "2024-01-01"
 [vars]
 ENVIRONMENT = "production"
 
+# Secrets (set via wrangler secret put)
+# These should be configured with: wrangler secret put SECRET_NAME
+# Example secrets for the routing.json configuration:
+# - 6nr8n2i1ve1rdnku8d1t (HubSpot API key)
+# - fhwowggbohorrud2kj16 (Notion API key)
+
 # KV namespace bindings
 [[kv_namespaces]]
 binding = "CF_STATE"
@@ -26,7 +32,7 @@ id = ""  # Will be populated from CF_IaC terraform outputs
 
 # Routes for deployment
 [routes]
-# patterns = ["api.simplesalt.company/*"]
+patterns = ["api.simplesalt.company/nuywznihg08edfslfk29/*"]
 
 # Build configuration
 [build]
