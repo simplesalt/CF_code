@@ -1,7 +1,7 @@
 # Cloudflare Workers configuration
 # See: https://developers.cloudflare.com/workers/configuration/
 
-name = "cf-workers"
+name = "nuywznihg08edfslfk29"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
 
