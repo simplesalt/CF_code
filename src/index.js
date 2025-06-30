@@ -301,6 +301,7 @@ function getCORSHeaders(request) {
   const allowedOrigins = [
     'https://apps.simplesalt.company',
     'https://studio.plasmic.app',
+    'https://host.plasmicdev.com',
     'http://localhost:3000',
     'http://localhost:54423',
     'http://localhost:55753'
