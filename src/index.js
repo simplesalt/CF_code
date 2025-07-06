@@ -98,17 +98,26 @@ export default {
 };
 
 /**
- * Verify CF Zero Trust authentication
+ * Verify authentication (CF Zero Trust or OAuth2)
  */
 async function verifyZeroTrustAuth(request, env) {
-  // Check for CF Access JWT in headers
+  // First check for OAuth2 Bearer token
+  const authHeader = request.headers.get('Authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const oauth2Result = await verifyOAuth2Token(authHeader.slice(7), env);
+    if (oauth2Result.valid) {
+      return oauth2Result;
+    }
+  }
+  
+  // Fall back to CF Access JWT
   const cfAccessJwt = request.headers.get('CF-Access-Jwt-Assertion') || 
                      request.headers.get('Cf-Access-Jwt-Assertion');
   
   if (!cfAccessJwt) {
     return { 
       valid: false, 
-      message: 'Missing CF Access JWT token' 
+      message: 'Missing authentication token (CF Access JWT or OAuth2 Bearer)' 
     };
   }
   
@@ -135,14 +144,81 @@ async function verifyZeroTrustAuth(request, env) {
     return { 
       valid: true, 
       user: payload.email,
-      aud: payload.aud 
+      aud: payload.aud,
+      authType: 'cf-access'
     };
     
   } catch (error) {
     return { 
       valid: false, 
-      message: 'Invalid CF Access token format' 
+      message: 'Invalid authentication token format' 
     };
+  }
+}
+
+/**
+ * Verify OAuth2 Bearer token
+ */
+async function verifyOAuth2Token(token, env) {
+  try {
+    // Get valid OAuth2 tokens from environment or KV store
+    const validTokens = await getValidOAuth2Tokens(env);
+    
+    if (!validTokens || !validTokens[token]) {
+      return {
+        valid: false,
+        message: 'Invalid OAuth2 token'
+      };
+    }
+    
+    const tokenInfo = validTokens[token];
+    
+    // Check token expiry if specified
+    if (tokenInfo.expires && tokenInfo.expires < Date.now() / 1000) {
+      return {
+        valid: false,
+        message: 'OAuth2 token expired'
+      };
+    }
+    
+    return {
+      valid: true,
+      user: tokenInfo.user || tokenInfo.client_id || 'oauth2-user',
+      scope: tokenInfo.scope,
+      authType: 'oauth2'
+    };
+    
+  } catch (error) {
+    console.error('OAuth2 token verification error:', error);
+    return {
+      valid: false,
+      message: 'OAuth2 token verification failed'
+    };
+  }
+}
+
+/**
+ * Get valid OAuth2 tokens from storage
+ */
+async function getValidOAuth2Tokens(env) {
+  try {
+    // First try environment variable (JSON string of token mappings)
+    if (env.OAUTH2_TOKENS) {
+      return JSON.parse(env.OAUTH2_TOKENS);
+    }
+    
+    // Fall back to KV store
+    if (env.CF_STATE) {
+      const kvTokens = await env.CF_STATE.get('oauth2_tokens');
+      if (kvTokens) {
+        return JSON.parse(kvTokens);
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error retrieving OAuth2 tokens:', error);
+    return null;
   }
 }
 
