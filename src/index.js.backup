@@ -1,28 +1,13 @@
 /**
- * Authentication Proxy Worker (CF Access Simplified)
+ * Authentication Proxy Worker
  * 
- * Handles API requests from CF Access authenticated users and proxies them
- * to target APIs using stored secrets. CF Access validates authentication
- * at the edge, so this worker just handles routing and API key management.
+ * Handles API requests from authorized domains and proxies them to target APIs
+ * using stored secrets. Integrates with CF Zero Trust for authentication.
  */
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    
-    // Health check endpoint
-    if (url.pathname === '/health') {
-      return new Response(JSON.stringify({ 
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        version: '2.0.0-cf-access'
-      }), {
-        headers: { 
-          'Content-Type': 'application/json',
-          ...getCORSHeaders(request)
-        }
-      });
-    }
     
     // CORS preflight handling
     if (request.method === 'OPTIONS') {
@@ -30,29 +15,29 @@ export default {
     }
     
     try {
-      // CF Access has already validated authentication at this point
-      // Available headers:
-      // - CF-Access-Authenticated-User-Email: user email (for user auth)
-      // - CF-Access-Client-Id: service token client ID (for service auth)
-      
-      const userEmail = request.headers.get('CF-Access-Authenticated-User-Email');
-      const serviceClientId = request.headers.get('CF-Access-Client-Id');
-      const isUserAuth = !!userEmail;
-      const isServiceAuth = !!serviceClientId;
-      
-      console.log(`🔐 Request authenticated via ${isUserAuth ? 'user' : 'service'} auth`);
-      if (isUserAuth) console.log(`👤 User: ${userEmail}`);
-      if (isServiceAuth) console.log(`🤖 Service: ${serviceClientId}`);
+      // Verify CF Zero Trust authentication
+      const authResult = await verifyZeroTrustAuth(request, env);
+      if (!authResult.valid) {
+        return new Response(JSON.stringify({ 
+          error: 'Authentication required',
+          message: authResult.message 
+        }), {
+          status: 401,
+          headers: { 
+            'Content-Type': 'application/json',
+            ...getCORSHeaders(request)
+          }
+        });
+      }
       
       // Get routing configuration
-      const routingConfig = await getRoutingConfig();
+      const routingConfig = await getRoutingConfig(env);
       
       // Extract original URL from headers (set by service worker)
       const originalUrl = request.headers.get('X-Original-URL');
       if (!originalUrl) {
         return new Response(JSON.stringify({ 
-          error: 'Missing original URL header',
-          message: 'X-Original-URL header is required'
+          error: 'Missing original URL header' 
         }), {
           status: 400,
           headers: { 
@@ -67,9 +52,8 @@ export default {
       
       if (!route) {
         return new Response(JSON.stringify({ 
-          error: 'No routing rule found',
-          domain: targetUrl.hostname,
-          availableRules: routingConfig.map(r => r.domain)
+          error: 'No routing rule found for domain',
+          domain: targetUrl.hostname 
         }), {
           status: 404,
           headers: { 
@@ -79,15 +63,12 @@ export default {
         });
       }
       
-      console.log(`🔄 Routing ${targetUrl.hostname} via rule:`, route);
-      
       // Get API credentials for this route
       const credentials = await getApiCredentials(env, route);
       if (!credentials) {
         return new Response(JSON.stringify({ 
           error: 'API credentials not found',
-          secretName: route.secretName,
-          message: 'Please configure the API secret in CF Worker environment'
+          secretName: route.secretName 
         }), {
           status: 500,
           headers: { 
@@ -98,19 +79,13 @@ export default {
       }
       
       // Proxy the request to the target API
-      return await proxyRequest(request, originalUrl, credentials, route, {
-        userEmail,
-        serviceClientId,
-        isUserAuth,
-        isServiceAuth
-      });
+      return await proxyRequest(request, originalUrl, credentials, route);
       
     } catch (error) {
-      console.error('❌ Proxy error:', error);
+      console.error('Proxy error:', error);
       return new Response(JSON.stringify({ 
         error: 'Internal proxy error',
-        message: error.message,
-        timestamp: new Date().toISOString()
+        message: error.message 
       }), {
         status: 500,
         headers: { 
@@ -123,24 +98,144 @@ export default {
 };
 
 /**
+ * Verify authentication (CF Zero Trust or OAuth2)
+ */
+async function verifyZeroTrustAuth(request, env) {
+  // First check for OAuth2 Bearer token
+  const authHeader = request.headers.get('Authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const oauth2Result = await verifyOAuth2Token(authHeader.slice(7), env);
+    if (oauth2Result.valid) {
+      return oauth2Result;
+    }
+  }
+  
+  // Fall back to CF Access JWT
+  const cfAccessJwt = request.headers.get('CF-Access-Jwt-Assertion') || 
+                     request.headers.get('Cf-Access-Jwt-Assertion');
+  
+  if (!cfAccessJwt) {
+    return { 
+      valid: false, 
+      message: 'Missing authentication token (CF Access JWT or OAuth2 Bearer)' 
+    };
+  }
+  
+  try {
+    // Verify JWT with CF Access (simplified - in production you'd verify signature)
+    const payload = JSON.parse(atob(cfAccessJwt.split('.')[1]));
+    
+    // Check token expiry
+    if (payload.exp && payload.exp < Date.now() / 1000) {
+      return { 
+        valid: false, 
+        message: 'CF Access token expired' 
+      };
+    }
+    
+    // Check if email domain is authorized
+    if (payload.email && !payload.email.endsWith('@simplesalt.company')) {
+      return { 
+        valid: false, 
+        message: 'Unauthorized domain' 
+      };
+    }
+    
+    return { 
+      valid: true, 
+      user: payload.email,
+      aud: payload.aud,
+      authType: 'cf-access'
+    };
+    
+  } catch (error) {
+    return { 
+      valid: false, 
+      message: 'Invalid authentication token format' 
+    };
+  }
+}
+
+/**
+ * Verify OAuth2 Bearer token
+ */
+async function verifyOAuth2Token(token, env) {
+  try {
+    // Get valid OAuth2 tokens from environment or KV store
+    const validTokens = await getValidOAuth2Tokens(env);
+    
+    if (!validTokens || !validTokens[token]) {
+      return {
+        valid: false,
+        message: 'Invalid OAuth2 token'
+      };
+    }
+    
+    const tokenInfo = validTokens[token];
+    
+    // Check token expiry if specified
+    if (tokenInfo.expires && tokenInfo.expires < Date.now() / 1000) {
+      return {
+        valid: false,
+        message: 'OAuth2 token expired'
+      };
+    }
+    
+    return {
+      valid: true,
+      user: tokenInfo.user || tokenInfo.client_id || 'oauth2-user',
+      scope: tokenInfo.scope,
+      authType: 'oauth2'
+    };
+    
+  } catch (error) {
+    console.error('OAuth2 token verification error:', error);
+    return {
+      valid: false,
+      message: 'OAuth2 token verification failed'
+    };
+  }
+}
+
+/**
+ * Get valid OAuth2 tokens from storage
+ */
+async function getValidOAuth2Tokens(env) {
+  try {
+    // First try environment variable (JSON string of token mappings)
+    if (env.OAUTH2_TOKENS) {
+      return JSON.parse(env.OAUTH2_TOKENS);
+    }
+    
+    // Fall back to KV store
+    if (env.CF_STATE) {
+      const kvTokens = await env.CF_STATE.get('oauth2_tokens');
+      if (kvTokens) {
+        return JSON.parse(kvTokens);
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error retrieving OAuth2 tokens:', error);
+    return null;
+  }
+}
+
+/**
  * Get routing configuration from apps.simplesalt.company
  */
-async function getRoutingConfig() {
+async function getRoutingConfig(env) {
   try {
     const response = await fetch('https://apps.simplesalt.company/routing.json');
     if (!response.ok) {
       throw new Error(`Failed to fetch routing config: ${response.status}`);
     }
-    const config = await response.json();
-    console.log(`📋 Loaded ${config.length} routing rules`);
-    return config;
+    return await response.json();
   } catch (error) {
-    console.error('⚠️ Error fetching routing config:', error);
+    console.error('Error fetching routing config:', error);
     // Fallback to default config
-    return [
-      {"domain": "api.hubapi.com", "authType": 2, "secretName": "6nr8n2i1ve1rdnku8d1t"},
-      {"domain": "api.notion.com", "authType": 3, "secretName": "fhwowggbohorrud2kj16"}
-    ];
+    return [];
   }
 }
 
@@ -160,7 +255,6 @@ function findMatchingRoute(routingConfig, hostname) {
  */
 async function getApiCredentials(env, route) {
   if (!route.secretName) {
-    console.warn(`⚠️ No secret name for route: ${route.domain}`);
     return null;
   }
   
@@ -168,14 +262,20 @@ async function getApiCredentials(env, route) {
     // Get secret from environment variable
     const secretValue = env[route.secretName];
     if (secretValue) {
-      console.log(`✅ Found API credentials for ${route.domain}`);
       return { apiKey: secretValue };
     }
     
-    console.warn(`⚠️ No API credentials found for secret: ${route.secretName}`);
+    // Try to get from KV store as fallback (if KV namespace is configured)
+    if (env.CF_STATE) {
+      const kvValue = await env.CF_STATE.get(`secret_${route.secretName}`);
+      if (kvValue) {
+        return JSON.parse(kvValue);
+      }
+    }
+    
     return null;
   } catch (error) {
-    console.error('❌ Error getting API credentials:', error);
+    console.error('Error getting API credentials:', error);
     return null;
   }
 }
@@ -183,10 +283,8 @@ async function getApiCredentials(env, route) {
 /**
  * Proxy request to target API with authentication
  */
-async function proxyRequest(originalRequest, targetUrl, credentials, route, authInfo) {
+async function proxyRequest(originalRequest, targetUrl, credentials, route) {
   const url = new URL(targetUrl);
-  
-  console.log(`🚀 Proxying to: ${url.href}`);
   
   // Prepare headers for the proxied request
   const proxyHeaders = new Headers();
@@ -206,7 +304,6 @@ async function proxyRequest(originalRequest, targetUrl, credentials, route, auth
     if (credentials.apiKey) {
       // Most APIs use Bearer token
       proxyHeaders.set('Authorization', `Bearer ${credentials.apiKey}`);
-      console.log(`🔑 Added Bearer token for ${route.domain}`);
     }
     if (credentials.headers) {
       // Custom headers for specific APIs
@@ -216,38 +313,22 @@ async function proxyRequest(originalRequest, targetUrl, credentials, route, auth
     }
   }
   
-  // Set proper host header and user agent
+  // Set proper host header
   proxyHeaders.set('Host', url.hostname);
-  proxyHeaders.set('User-Agent', `SimpleSalt-API-Proxy/2.0 (CF-Access; ${authInfo.isUserAuth ? 'user' : 'service'})`);
-  
-  // Add user context if available
-  if (authInfo.userEmail) {
-    proxyHeaders.set('X-Forwarded-User', authInfo.userEmail);
-  }
-  if (authInfo.serviceClientId) {
-    proxyHeaders.set('X-Forwarded-Service', authInfo.serviceClientId);
-  }
+  proxyHeaders.set('User-Agent', 'SimpleSalt-API-Proxy/1.0');
   
   // Get request body if present
   let body = null;
   if (originalRequest.method !== 'GET' && originalRequest.method !== 'HEAD') {
-    try {
-      body = await originalRequest.blob();
-    } catch (error) {
-      console.warn('⚠️ Could not read request body:', error);
-    }
+    body = await originalRequest.blob();
   }
   
   // Make the proxied request
-  const startTime = Date.now();
   const proxyResponse = await fetch(url.href, {
     method: originalRequest.method,
     headers: proxyHeaders,
     body: body
   });
-  const duration = Date.now() - startTime;
-  
-  console.log(`✅ Proxy response: ${proxyResponse.status} ${proxyResponse.statusText} (${duration}ms)`);
   
   // Prepare response headers
   const responseHeaders = new Headers();
@@ -266,11 +347,9 @@ async function proxyRequest(originalRequest, targetUrl, credentials, route, auth
     responseHeaders.set(key, value);
   });
   
-  // Add proxy identification headers
+  // Add proxy identification
   responseHeaders.set('X-Proxied-By', 'SimpleSalt-CF-Worker');
   responseHeaders.set('X-Original-Host', url.hostname);
-  responseHeaders.set('X-Proxy-Duration', `${duration}ms`);
-  responseHeaders.set('X-Auth-Type', authInfo.isUserAuth ? 'user' : 'service');
   
   // Return the proxied response
   return new Response(proxyResponse.body, {
@@ -309,7 +388,7 @@ function getCORSHeaders(request) {
   return {
     'Access-Control-Allow-Origin': corsOrigin,
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS, PATCH',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Original-URL, X-Auth-Type, X-Secret-Name, CF-Access-Jwt-Assertion, CF-Access-Client-Id, CF-Access-Client-Secret',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Original-URL, X-Auth-Type, X-Secret-Name, CF-Access-Jwt-Assertion',
     'Access-Control-Max-Age': '86400',
     'Access-Control-Allow-Credentials': 'true'
   };
